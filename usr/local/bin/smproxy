@@ -1,0 +1,529 @@
+#!/usr/bin/python3
+
+import os
+import sys
+import time
+import argparse
+import re
+import hashlib
+import yaml
+from struct import unpack_from
+from socket import getfqdn
+from spacewalk.server import rhnSQL
+from spacewalk.common import rhnLog
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse
+
+LISTEN_ADDR = '0.0.0.0'
+LISTEN_PORT = 8216
+KEY_MAX_TTL = 60
+SMPROXY_LOGFILE = '/var/log/smproxy.log'
+SMPROXY_LOGLEVEL = 3
+
+if 'LISTEN_ADDR' in os.environ:
+	LISTEN_ADDR = os.environ['LISTEN_ADDR']
+if 'LISTEN_PORT' in os.environ:
+	LISTEN_PORT = int(os.environ['LISTEN_PORT'])
+if 'KEY_MAX_TTL' in os.environ:
+	KEY_MAX_TTL = int(os.environ['KEY_MAX_TTL'])
+if 'SMPROXY_LOGFILE' in os.environ:
+	SMPROXY_LOGFILE = os.environ['SMPROXY_LOGFILE']
+if 'SMPROXY_LOGLEVEL' in os.environ:
+	SMPROXY_LOGLEVEL = int(os.environ['SMPROXY_LOGLEVEL'])
+
+PILLAR_DATA_FILE = '/srv/susemanager/pillar_data/pillar_%s.yml'
+
+sm_server = getfqdn()
+
+rhnLog.initLOG(SMPROXY_LOGFILE, SMPROXY_LOGLEVEL)
+
+usage = '%(prog)s [options] [command]'
+parser = argparse.ArgumentParser(usage=usage)
+parser.add_argument('command', nargs='*', help=argparse.SUPPRESS)
+parser.add_argument('-c', '--commands', action='store_true',
+                        help='list all available commands')
+parser.add_argument('-m', '--minions', action='store_true',
+                        help='print minions only, strip proxies')
+parser.add_argument('-p', '--proxies',
+                        help='use only proxies listed')
+parser.add_argument('-x', '--exclude-proxies',
+                        help='exclude proxies from assignment')
+parser.add_argument('-F', '--force', action='store_true',
+                        help='force assigning system to proxy, even if already assigned')
+parser.add_argument('-R', '--reassign', action='store_true',
+                        help='force reassigning system to another proxy')
+parser.add_argument('-A', '--all', action='store_true',
+                        help='process all systems')
+parser.add_argument('-U', '--unassigned', action='store_true',
+                        help='process unassigned systems')
+parser.add_argument('-f', '--file',
+                        help='a file with list of systems to assign proxy for [default: -/STDIN]')
+parser.add_argument('-i', '--input',
+                        help='input list format (minion_id|id|hostname|machine_id) [default: minion_id]')
+parser.add_argument('-o', '--output',
+                        help='output format (minion_id|id|hostname|machine_id|json) [default: minion_id]')
+options = parser.parse_args()
+if options.command:
+	args = options.command
+else:
+	args = []
+output = options.output or 'minion_id'
+if output not in ('minion_id', 'id', 'machine_id', 'hostname', 'json'):
+	print("Error: Wrong output format specified. Possible values: minion_id|id|hostname|machine_id|json")
+	exit(4)
+inpf = options.input or 'minion_id'
+if inpf not in ('minion_id', 'id', 'machine_id', 'hostname'):
+	print("Error: Wrong output format specified. Possible values: minion_id|id|hostname|machine_id|json")
+	exit(3)
+
+rhnSQL.initDB()
+
+proxies = []
+
+def write2log(level, msg):
+	msg = "[%s]: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())), msg)
+	rhnLog.log_clean(level, msg)
+
+def getProxiesList():
+	h = rhnSQL.prepare("""
+			SELECT s.id,s.name AS minion_id,s.hostname,s.machine_id FROM rhnProxyInfo AS pi
+			LEFT JOIN rhnServer AS s ON pi.server_id=s.id
+		""")
+	h.execute()
+	return h.fetchall_dict()
+
+def listProxies():
+	global proxies
+	proxies = getProxiesList()
+	for proxy in proxies:
+		if output == 'json':
+			print(proxy)
+		else:
+			print(proxy[output])
+
+def getProxiesSummary(noout=False):
+	global proxies
+	proxies = getProxiesList()
+	sc = {}
+	h = rhnSQL.prepare("""
+			SELECT s.id,COUNT(server_id) AS count FROM rhnServerPath AS sp
+				LEFT JOIN rhnServer AS s ON s.id=sp.proxy_server_id GROUP BY s.id
+		""")
+	h.execute()
+	for proxy in h.fetchall_dict():
+		sc[proxy['id']] = proxy['count']
+	for proxy in proxies:
+		if proxy['id'] in sc:
+			proxy['servers_count'] = sc[proxy['id']]
+		else:
+			proxy['servers_count'] = 0
+		if not noout:
+			if output == 'json':
+				print(proxy)
+			else:
+				print("%s:%s" % (proxy[output], proxy['servers_count']))
+	return proxies
+
+def getSystemProxy(syst = None, minion_id = None):
+	if syst and 'server_id' in syst and 'proxy_id' in syst and syst['proxy_id']:
+		return [syst]
+	elif syst and 'server_id' in syst and 'proxy_id' in syst:
+		return
+	cond = 'WHERE sp.position=0'
+	if minion_id:
+		cond = 'WHERE mi.name=:srv_id'
+	if syst:
+		cond = 'WHERE sp.server_id=:srv_id'
+	h = rhnSQL.prepare("""
+			SELECT mi.id AS server_id,
+				mi.name AS server_minion_id,
+				mi.hostname AS server_hostname,
+				mi.machine_id AS server_machine_id,
+				sp.proxy_server_id AS proxy_id,
+				pi.name AS proxy_minion_id,
+				pi.hostname AS proxy_hostname,
+				pi.machine_id AS proxy_machine_id
+			FROM rhnServer AS mi
+			LEFT JOIN rhnServerPath AS sp ON sp.server_id=mi.id
+			LEFT JOIN rhnServer AS pi ON sp.proxy_server_id=pi.id
+			%s
+		""" % cond)
+	if syst:
+		h.execute(srv_id = syst['id'])
+	elif minion_id:
+		h.execute(srv_id = minion_id)
+	else:
+		h.execute()
+	return h.fetchall_dict()
+
+def listAssignments():
+	sysprox = getSystemProxy()
+	if not sysprox:
+		return
+	pxy_inc = []
+	pxy_exc = []
+	if options.proxies:
+		pxy_inc = re.split(';|,| |\|:', options.proxies)
+	if options.exclude_proxies:
+		pxy_exc = re.split(';|,| |\|:', options.exclude_proxies)
+
+	for sysprx in sysprox:
+		if pxy_inc and not (sysprx['proxy_minion_id'] in pxy_inc or \
+				sysprx['proxy_hostname'] in pxy_inc or \
+				("%s" % sysprx['proxy_id']) in pxy_inc):
+			continue
+		if pxy_exc and (sysprx['proxy_minion_id'] in pxy_exc or \
+				sysprx['proxy_hostname'] in pxy_exc or \
+				("%s" % sysprx['proxy_id']) in pxy_exc):
+			continue
+		if output == 'json':
+			print(sysprx)
+		else:
+			if options.minions:
+				print(sysprx['server_'+output])
+			else:
+				print("%s:%s" % (sysprx['server_'+output], sysprx['proxy_'+output]))
+
+def getSystemBy(val,inf='minion_id'):
+	rpl = {
+		'minion_id':'s.name',
+		'id':'s.id',
+		'hostname':'s.hostname',
+		'machine_id':'s.machine_id'
+	}
+	h = rhnSQL.prepare("""
+			SELECT s.id,s.name AS minion_id,s.hostname,s.machine_id FROM rhnServer AS s
+			LEFT JOIN rhnProxyInfo AS pi ON s.id=pi.server_id WHERE pi.server_id IS NULL
+			AND %s=:val
+		""" % (rpl[inf]))
+	h.execute(val=val)
+	return h.fetchall_dict()
+
+def getStringHashIdx(hstr):
+	hash_object = hashlib.sha1(hstr.encode())
+	hsh = unpack_from('>I', hash_object.digest())[0]
+	return hsh
+
+def sysProxyAssignTo(syst, prxy):
+	data = {
+		'server_id'       : syst['id'],
+		'proxy_server_id' : prxy['id'],
+		'hostname'        : prxy['hostname']
+	}
+	h = rhnSQL.prepare("""
+			SELECT server_id,proxy_server_id FROM rhnServerPath
+			WHERE position=0 AND server_id = :server_id
+		""")
+	h.execute(server_id=syst['id'])
+	t = h.fetchone_dict()
+	if t:
+		if t['proxy_server_id'] == prxy['id']:
+			return {'server_id': syst['id'],
+					'server_minion_id': syst['minion_id'],
+					'server_hostname': syst['hostname'],
+					'server_machine_id': syst['machine_id'],
+					'proxy_id': prxy['id'],
+					'proxy_minion_id': prxy['minion_id'],
+					'proxy_hostname': prxy['hostname'],
+					'proxy_machine_id': prxy['machine_id']}
+		h = rhnSQL.prepare("""
+			UPDATE rhnServerPath
+				SET proxy_server_id = :proxy_server_id,
+					hostname = :hostname
+				WHERE position=0 AND server_id = :server_id
+			""")
+	else:
+		h = rhnSQL.prepare("""
+			INSERT INTO rhnServerPath
+				(server_id, proxy_server_id, hostname, position)
+				VALUES (:server_id, :proxy_server_id, :hostname, 0)
+			""")
+	rhnSQL.transaction("setSystemProxy%s" % syst['id'])
+	try:
+		h.execute(*(), **data)
+	except:
+		rhnSQL.rollback("setSystemProxy%s" % syst['id'])
+		return
+	else:
+		rhnSQL.commit()
+
+	with open(PILLAR_DATA_FILE % (syst['minion_id']), 'r+') as f:
+		ydata = yaml.load(f)
+		if ydata['mgr_server']:
+			ydata['mgr_server'] = prxy['hostname']
+			f.seek(0,0)
+			f.truncate()
+			yaml.dump(ydata, f, default_flow_style=False, indent=4)
+		f.close()
+
+	return {'server_id': syst['id'],
+			'server_minion_id': syst['minion_id'],
+			'server_hostname': syst['hostname'],
+			'server_machine_id': syst['machine_id'],
+			'proxy_id': prxy['id'],
+			'proxy_minion_id': prxy['minion_id'],
+			'proxy_hostname': prxy['hostname'],
+			'proxy_machine_id': prxy['machine_id']}
+
+def toSystem(syst):
+	if syst and 'server_id' in syst and 'proxy_id' in syst:
+		return {'id': syst['server_id'], 'minion_id': syst['server_minion_id'],
+				'hostname': syst['server_hostname'], 'machine_id': syst['server_machine_id']}
+	return syst
+
+def sysProxyAssignAny(syst, nprxy, cprxy = None):
+	syst = toSystem(syst)
+	np = len(nprxy)
+	hxi = getStringHashIdx(syst['minion_id'])
+	pa = hxi % np
+	if cprxy and nprxy[pa]['id'] == cprxy['proxy_id']:
+		return cprxy
+	return sysProxyAssignTo(syst, nprxy[pa])
+
+def sysProxyAssign(syst, ret_proxy_hostname = None):
+	if not syst:
+		return
+	if not isinstance(syst, list):
+		syst = [syst]
+	global proxies
+	for system in syst:
+		sysprx = getSystemProxy(system)
+		if sysprx and len(sysprx) > 0:
+			sysprx = sysprx[0]
+		if options.reassign or options.force or not sysprx:
+			nprxy = proxies
+			if sysprx and options.reassign:
+				nprxyf = filter(lambda x: x['id'] != sysprx['proxy_id'], nprxy)
+				nprxy = list(nprxyf)
+			sysprx = sysProxyAssignAny(system, nprxy, sysprx)
+		if ret_proxy_hostname:
+			return sysprx['proxy_hostname']
+		if output == 'json':
+			print(sysprx)
+		else:
+			if options.minions:
+				print(sysprx['server_'+output])
+			else:
+				print("%s:%s" % (sysprx['server_'+output], sysprx['proxy_'+output]))
+
+def proxyAssign():
+	global proxies
+	proxies = getProxiesList()
+	if options.all:
+		iterSystems('', sysProxyAssign)
+		return
+	if options.unassigned:
+		iterSystems('unassigned', sysProxyAssign)
+		return
+	if len(args) > 1:
+		for ls in args[1:]:
+			syst = getSystemBy(ls,inpf)
+			if syst:
+				sysProxyAssign(syst)
+			else:
+				print("WARNING: Not Found: %s" % (ls))
+		return
+	src_file = options.file or '-'
+	if src_file == '-':
+		fh = sys.stdin
+	else:
+		fh = open(src_file, 'r')
+	for line in fh:
+		ls = line.strip()
+		syst = getSystemBy(ls,inpf)
+		if syst:
+			sysProxyAssign(syst)
+		else:
+			print("WARNING: Not Found: %s" % (ls))
+
+def iterSystems(scope='', iter_func = None):
+	global proxies
+	proxies = getProxiesList()
+	prox_ids = list(map(lambda x: x['id'], proxies))
+	qry_add = ''
+	if scope == 'unassigned':
+		qry_add = ' WHERE sp.proxy_server_id IS NULL'
+	h = rhnSQL.prepare("""
+			SELECT s.id,s.name AS minion_id,s.hostname,s.machine_id FROM rhnServer AS s
+			LEFT JOIN rhnServerPath AS sp ON (sp.server_id=s.id AND sp.position=0) %s
+		""" % qry_add)
+	h.execute()
+	systems = h.fetchall_dict()
+
+	for syst in systems:
+		if syst['id'] not in prox_ids:
+			if iter_func:
+				iter_func(syst)
+			else:
+				if output == 'json':
+					print(syst)
+				else:
+					print(syst[output])
+
+def listUnassigned():
+	iterSystems('unassigned')
+
+def listAllSystems():
+	iterSystems()
+
+def listCommands():
+	global commands
+	for cmd in commands.keys():
+		print("%s:\n\t%s" % (cmd, commands[cmd]['help']))
+
+keys = {}
+
+def reqGetKey(req, param):
+	global keys
+	kt = time.time()
+	minion_id = req.headers['X-Minion-ID']
+	if not minion_id:
+		return 'VOID'
+	ck = minion_id
+	if ck in keys and kt<keys[ck]['time']+KEY_MAX_TTL:
+		return keys[ck]['key']
+	kv = "%s:%s" % (ck, kt)
+	key = hashlib.sha1(kv.encode()).hexdigest()
+	key = "%s%s" % (key, "%0.4x" % req.client_address[1])
+	keys[ck] = {'key': key, 'time': kt}
+	return key
+
+def getHdrValue(hdrs, key):
+	if key in hdrs:
+		return hdrs[key]
+	return None
+
+def smGetProxies(hdrs):
+	global proxies
+	kt = time.time()
+	minion_id = getHdrValue(hdrs, 'X-Minion-ID')
+	machine_id = getHdrValue(hdrs, 'X-Machine-ID')
+	host_name = getHdrValue(hdrs, 'X-Host-Name')
+	ip_addr = getHdrValue(hdrs, 'X-IP-Address')
+	fwd_for = getHdrValue(hdrs, 'X-Forwarded-For')
+	add_fwd = ''
+	if fwd_for:
+		add_fwd = '; FORWARDED-FOR: %s' % fwd_for
+	new_req = False
+	req_name = 'getProxy'
+	if host_name and ip_addr:
+		new_req = True
+		req_name = 'getProxies'
+		write2log(0, "[checkIn]: MINION-ID: %s; MACHINE-ID: %s; HOSTNAME: %s; IP: %s%s" % (minion_id, machine_id, host_name, ip_addr, add_fwd))
+	ck = minion_id
+	if ck not in keys or kt>keys[ck]['time']+KEY_MAX_TTL:
+		return 'ERROR: No key or TTL expired'
+	key = keys[ck]['key']
+	rkey = getHdrValue(hdrs, 'X-RKey')
+	if not rkey:
+		write2log(0, "[%s]: MINION-ID: %s; MACHINE-ID: %s%s; STATUS: UNAUTHORIZED-NOKEY" % (req_name, minion_id, system['server_machine_id'], add_fwd))
+		return "ERROR: Unauthorized"
+	if minion_id:
+		syst = getSystemProxy(None, minion_id)
+		if syst:
+			for system in syst:
+				if system['server_minion_id'] == minion_id:
+					kv = "%s:%s" % (system['server_machine_id'], key)
+					rkv = hashlib.sha1(kv.encode()).hexdigest()
+					if rkey != rkv:
+						write2log(0, "[%s]: MINION-ID: %s; MACHINE-ID: %s%s; STATUS: UNAUTHORIZED" % (req_name, minion_id, system['server_machine_id'], add_fwd))
+						return "ERROR: Unauthorized"
+					phn = sysProxyAssign(system, True)
+					if phn:
+						write2log(0, "[%s]: MINION-ID: %s; MACHINE-ID: %s; PROXY: %s%s; STATUS: OK" % (req_name, minion_id, system['server_machine_id'], phn, add_fwd))
+						if new_req:
+							out = phn + "\n"
+							c = 1
+							for proxy in proxies:
+								if proxy['hostname'] != phn:
+									out += proxy['hostname'] + "\n"
+									c += 1
+							out += "[#%s]" % c
+							return out
+						return phn
+					else:
+						write2log(0, "[%s]: MINION-ID: %s; MACHINE-ID: %s%s; STATUS: ERROR" % (req_name, minion_id, system['server_machine_id'], add_fwd))
+						return "ERROR: Unable to assign system to a proxy"
+	write2log(0, "[%s]: MINION-ID: %s; MACHINE-ID: %s%s; STATUS: UNAUTHORIZED-NOMINION" % (req_name, minion_id, machine_id, add_fwd))
+	return "ERROR: Unauthorized"
+
+def reqGetProxies(req, param):
+	return smGetProxies(req.headers)
+
+class SMProxyHandler(BaseHTTPRequestHandler):
+	def log_message(self, format, *args):
+		return
+	def do_GET(self):
+		paths = {
+			'/getKey'    : {'status': 200, 'func': reqGetKey},
+			'/getProxy'  : {'status': 200, 'func': reqGetProxies},
+			'/getProxies': {'status': 200, 'func': reqGetProxies}
+		}
+		content = ''
+		qry = urlparse(self.path)
+		if qry.path in paths:
+			self.send_response(paths[qry.path]['status'])
+			if paths[qry.path]['func']:
+				func = paths[qry.path]['func']
+				content = func(self, qry)
+		else:
+			self.send_response(500)
+		self.send_header('Content-type', 'text/plain')
+		self.end_headers()
+		if not content.endswith("\n"):
+			content += "\n"
+		self.wfile.write(bytes(content, 'UTF-8'))
+
+def runServer():
+	global proxies
+	proxies = getProxiesList()
+	write2log(0, "Starting SMPROXY(HTTPServer) service listening on %s:%s ..." % (LISTEN_ADDR, LISTEN_PORT))
+	with HTTPServer((LISTEN_ADDR, LISTEN_PORT), SMProxyHandler) as httpd:
+		try:
+			httpd.serve_forever()
+		except KeyboardInterrupt:
+			pass
+		httpd.server_close()
+
+commands = {
+	'list-proxies': {'help': "List all available proxy servers",
+				'func': listProxies
+		},
+	'list-assignments': {'help': "List all current assignments",
+				'func': listAssignments
+		},
+	'list-unassigned': {'help': "List all unassigned minions",
+				'func': listUnassigned
+		},
+	'list-all': {'help': "List all minions",
+				'func': listAllSystems
+		},
+	'get-proxies-summary': {'help': "Get proxies summary",
+				'func': getProxiesSummary
+		},
+	'assign-proxy': {'help': "Assign system to a proxy",
+				'func': proxyAssign
+		},
+	'run-server': {'help': "Run web service server to provide proxy assignment",
+				'func': runServer
+		},
+	'commands': {'help': "List all available commands",
+				'func': listCommands
+		},
+}
+
+if args and args[0] in commands and commands[args[0]]:
+	func = commands[args[0]]['func']
+	func()
+	exit(0)
+
+if args:
+	print("Error: Unknown command")
+	exit(2)
+
+if options.commands:
+	listCommands()
+	exit(0)
+
+parser.print_help()
+exit(1)

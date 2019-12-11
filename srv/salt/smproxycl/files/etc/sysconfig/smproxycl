@@ -1,0 +1,2 @@
+SMPROXY_HOST='https://smgr4.demo.lab/smproxy'
+SALT_MINION_CONFIGS='/etc/salt/minion.d/susemanager.conf:/etc/salt/minion'

@@ -1,0 +1,15 @@
+[Unit]
+Description=SUSE Manager Proxy Assigner web service
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+Restart=always
+User=tomcat
+Group=tomcat
+EnvironmentFile=-/etc/sysconfig/smproxy
+ExecStart=/usr/local/bin/smproxy run-server
+PIDFile=/run/smproxy.pid
+
+[Install]
+WantedBy=multi-user.target

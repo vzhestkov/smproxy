@@ -1,0 +1,96 @@
+#!/bin/sh
+
+. /etc/sysconfig/smproxycl
+
+if [ "${1}" == 'install' ]; then
+	SERVICE_NAME='salt-minion.service'
+	SERVICE_SRC="/usr/lib/systemd/system/${SERVICE_NAME}"
+	SERVICE_DST="/etc/systemd/system/${SERVICE_NAME}"
+	if [ -f "${SERVICE_SRC}" ]; then
+		SCRIPT_PATH=$(which ${0})
+		SERVICE_NEW=$(cat /usr/lib/systemd/system/salt-minion.service | sed "s/^Restart=.*/Restart=always/" | sed "/^ExecStart=.*/i ExecStartPre=${SCRIPT_PATH} set")
+		WR_S=0
+		if [ ! -f "${SERVICE_DST}" ]; then
+			WR_S=1
+		else
+			NEW_HX=$(echo -e "${SERVICE_NEW}" | sha1sum | sed 's/ .*//')
+			OLD_HX=$(sha1sum "${SERVICE_DST}" | sed 's/ .*//')
+			if [ "${NEW_HX}" != "${OLD_HX}" ]; then
+				WR_S=1
+			fi
+		fi
+		if [ ${WR_S} -eq 1 ]; then
+			echo "Creating new service file: ${SERVICE_DST}"
+			echo -e "${SERVICE_NEW}" > "${SERVICE_DST}"
+			systemctl reenable "${SERVICE_NAME}"
+			systemctl restart "${SERVICE_NAME}"
+		fi
+	fi
+	exit 0
+fi
+
+HOST_NAME=$(hostname -f 2> /dev/null)
+if [ $? -ne 0 ]; then
+	HOST_NAME=$(hostname 2> /dev/null)
+fi
+IP_ADDR=$(hostname -i)
+
+MINION_ID=''
+if [ -f '/etc/salt/minion_id'  ]; then
+	MINION_ID=$(cat /etc/salt/minion_id)
+else
+	MINION_ID="${HOST_NAME}"
+fi
+MACHINE_ID=$(cat /etc/machine-id)
+
+GETKEY_URL="${SMPROXY_HOST}/getKey"
+
+key=$(curl -s -H "X-Minion-ID: ${MINION_ID}" ${GETKEY_URL})
+rlns=$(echo "${key}" | wc -l)
+if [ ${rlns} -gt 1 ]; then
+	echo "ERROR: Unable to get the key from the server!"
+	if [ "${1}" == 'set' ]; then
+		exit 0
+	fi
+	exit 1
+fi
+rkey=$(echo -n "${MACHINE_ID}:${key}" | sha1sum | sed 's/ .*//')
+GETPROXIES_URL="${SMPROXY_HOST}/getProxies"
+proxies=$(curl -s -H "X-Minion-ID: ${MINION_ID}" -H "X-Machine-ID: ${MACHINE_ID}" -H "X-Host-Name: ${HOST_NAME}" -H "X-IP-Address: ${IP_ADDR}" -H "X-RKey: ${rkey}" ${GETPROXIES_URL})
+pxlist=$(echo "${proxies}" | head -n -1)
+pxlcnt=$(echo "${pxlist}" | wc -l)
+pxrcnt=$(echo "${proxies}" | tail -n 1 | sed -E -n 's/\[#([0-9]+)\]/\1/p')
+if [ -z "${pxrcnt}" ]; then
+	pxrcnt=0
+fi
+if [ "${pxrcnt}" -ne "${pxlcnt}" ]; then
+	echo "ERROR: Unable to get the proxy from the server!"
+	if [ "${1}" == 'set' ]; then
+		exit 0
+	fi
+	exit 2
+fi
+
+if [ "${1}" == 'get-proxies' ]; then
+	echo "${pxlist}"
+	exit 0
+fi
+
+proxy=$(echo "${pxlist}" | head -n 1)
+
+if [ -n "${proxy}" ]; then
+	if [ "${1}" == 'set' ]; then
+		IFS=':'
+		read -a SCFS <<< "${SALT_MINION_CONFIGS}"
+		for SCF in "${SCFS[@]}"; do
+			if [ -f "${SCF}" ]; then
+				OPXY=$(cat "${SCF}" | sed -n 's/^master: //p')
+				if [[ -n "$OPXY" && "${OPXY}" != "${proxy}" ]]; then
+					sed -i "s/^master: .*/master: ${proxy}/" "${SCF}"
+				fi
+			fi
+		done
+	else
+		echo "${proxy}"
+	fi
+fi
