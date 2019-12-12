@@ -7,6 +7,7 @@ import argparse
 import re
 import hashlib
 import yaml
+import traceback
 from struct import unpack_from
 from socket import getfqdn
 from spacewalk.server import rhnSQL
@@ -81,8 +82,11 @@ rhnSQL.initDB()
 proxies = []
 
 def write2log(level, msg):
-	msg = "[%s]: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())), msg)
-	rhnLog.log_clean(level, msg)
+	ts = "[%s]: " % time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
+	msg = msg.rstrip()
+	for s in msg.split("\n"):
+		s = "%s%s" % (ts, s)
+		rhnLog.log_clean(level, s)
 
 def getProxiesList():
 	h = rhnSQL.prepare("""
@@ -465,7 +469,30 @@ class SMProxyHandler(BaseHTTPRequestHandler):
 			self.send_response(paths[qry.path]['status'])
 			if paths[qry.path]['func']:
 				func = paths[qry.path]['func']
-				content = func(self, qry)
+				att_mx = 5
+				att = 0
+				while att < att_mx:
+					try:
+						content = func(self, qry)
+					except Exception as e:
+						exc_type, exc_value, exc_traceback = sys.exc_info()
+						write2log(0, "ERROR: Exception during processing the request: %s" % type(e).__name__)
+						if type(e).__name__ in ('SQLError', 'InterfaceError'):
+							time.sleep(1)
+							global rhnSQL
+							att += 1
+							write2log(0, "Trying to reconnect %d/%d..." % (att, att_mx))
+							try:
+								rhnSQL.initDB()
+							except:
+								write2log(0, "... reconnect failed!")
+						else:
+							write2log(0, "ERROR: Unable to handle the exception: %s" % e)
+							for exc in traceback.format_exception(exc_type, exc_value, exc_traceback):
+								write2log(0, exc)
+							exit(8)
+					else:
+						att = att_mx
 		else:
 			self.send_response(500)
 		self.send_header('Content-type', 'text/plain')
