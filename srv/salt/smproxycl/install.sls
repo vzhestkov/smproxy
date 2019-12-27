@@ -1,7 +1,6 @@
-check-not-proxy:
-  cmd.run:
-    - name: (! (rpm -q spacewalk-proxy-salt || systemctl is-enabled salt-broker.service)) > /dev/null 2>&1;
-
+{%- set sw_proxy_version = salt['pkg.version']('spacewalk-proxy-salt') %}
+{%- set broker_enabled = salt['service.enabled']('salt-broker.service') %}
+{%- if sw_proxy_version == {} and not broker_enabled %}
 smproxycl-bin:
   file.managed:
     - name: /usr/local/bin/smproxycl
@@ -9,8 +8,6 @@ smproxycl-bin:
     - mode: 0755
     - user: root
     - group: root
-    - require:
-      - cmd: check-not-proxy
 
 smproxycl-sysconfig:
   file.managed:
@@ -30,3 +27,7 @@ smproxycl-install:
     - watch:
       - file: smproxycl-bin
       - file: smproxycl-sysconfig
+{%- else %}
+smproxycl can't be installed on SUSE Manager proxy server:
+  test.succeed_without_changes
+{%- endif %}
