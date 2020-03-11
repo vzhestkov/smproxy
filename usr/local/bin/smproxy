@@ -20,6 +20,7 @@ LISTEN_PORT = 8216
 KEY_MAX_TTL = 60
 SMPROXY_LOGFILE = '/var/log/smproxy.log'
 SMPROXY_LOGLEVEL = 3
+PROMETHEUS_MONITORING = 0
 
 if 'LISTEN_ADDR' in os.environ:
 	LISTEN_ADDR = os.environ['LISTEN_ADDR']
@@ -31,6 +32,8 @@ if 'SMPROXY_LOGFILE' in os.environ:
 	SMPROXY_LOGFILE = os.environ['SMPROXY_LOGFILE']
 if 'SMPROXY_LOGLEVEL' in os.environ:
 	SMPROXY_LOGLEVEL = int(os.environ['SMPROXY_LOGLEVEL'])
+if 'PROMETHEUS_MONITORING' in os.environ:
+	PROMETHEUS_MONITORING = int(os.environ['PROMETHEUS_MONITORING'])
 
 PILLAR_DATA_FILE = '/srv/susemanager/pillar_data/pillar_%s.yml'
 
@@ -454,21 +457,68 @@ def smGetProxies(hdrs):
 def reqGetProxies(req, param):
 	return smGetProxies(req.headers)
 
+def mtcsGetSuseSaltEvent(prefix = None):
+	h = rhnSQL.prepare("SELECT COUNT(*) AS cnt FROM suseSaltEvent")
+	h.execute()
+	return "%s %s\n" % (prefix, h.fetchone_dict()['cnt'])
+
+def mtcsGetRhnServer(prefix = None):
+	h = rhnSQL.prepare("SELECT COUNT(*) AS cnt FROM rhnServer")
+	h.execute()
+	return "%s %s\n" % (prefix, h.fetchone_dict()['cnt'])
+
+salt_key_types = {
+	'accepted': '/etc/salt/pki/master/minions',
+	'unaccepted': '/etc/salt/pki/master/minions_pre',
+	'denied': '/etc/salt/pki/master/minions_denied',
+	'rejected': '/etc/salt/pki/master/minions_rejected'
+}
+def mtcsGetSaltKeys(prefix = None):
+	out = ""
+	for ktype in salt_key_types:
+		out += "%s{type=\"%s\"} %d\n" % (prefix, ktype, int(os.popen("find '%s' -maxdepth 1 -type f -printf . | wc -c" % salt_key_types[ktype]).read()));
+	return out
+
+metrics = {
+	'suse_manager_db_suseSaltEvent_count' : {
+		'HELP': 'The number of records in suseSaltEvent table of SUSE Manager DB',
+		'TYPE': 'gauge' , 'getFunc': mtcsGetSuseSaltEvent },
+	'suse_manager_db_rhnServer_count' : {
+		'HELP': 'The number of registered systems',
+		'TYPE': 'gauge' , 'getFunc': mtcsGetRhnServer },
+	'suse_manager_salt_keys_count' : {
+		'HELP': 'The number of salt keys by type',
+		'TYPE': 'gauge' , 'getFunc': mtcsGetSaltKeys }
+}
+def getMetrics(req, param):
+	out = ""
+	for metric in metrics:
+		getFunc = metrics[metric]['getFunc']
+		out += "# HELP %s %s\n" % (metric, metrics[metric]["HELP"])
+		out += "# TYPE %s %s\n" % (metric, metrics[metric]["TYPE"])
+		out += getFunc(metric)
+	write2log(0, "Metrics returned.")
+	return out
+
 class SMProxyHandler(BaseHTTPRequestHandler):
 	def log_message(self, format, *args):
 		return
 	def do_GET(self):
 		paths = {
-			'/getKey'    : {'status': 200, 'func': reqGetKey},
-			'/getProxy'  : {'status': 200, 'func': reqGetProxies},
-			'/getProxies': {'status': 200, 'func': reqGetProxies}
+			'/getKey'    : {'func': reqGetKey},
+			'/getProxy'  : {'func': reqGetProxies},
+			'/getProxies': {'func': reqGetProxies}
 		}
 		content = ''
 		qry = urlparse(self.path)
-		if qry.path in paths:
-			self.send_response(paths[qry.path]['status'])
-			if paths[qry.path]['func']:
+		if qry.path in paths or (PROMETHEUS_MONITORING and qry.path == '/metrics'):
+			self.send_response(200)
+			func = None
+			if (qry.path in paths) and paths[qry.path]['func']:
 				func = paths[qry.path]['func']
+			elif qry.path == '/metrics':
+				func = getMetrics
+			if func:
 				att_mx = 5
 				att = 0
 				while att < att_mx:
@@ -505,6 +555,8 @@ def runServer():
 	global proxies
 	proxies = getProxiesList()
 	write2log(0, "Starting SMPROXY(HTTPServer) service listening on %s:%s ..." % (LISTEN_ADDR, LISTEN_PORT))
+	if PROMETHEUS_MONITORING:
+		write2log(0, "SMPROXY Prometheus Monitoring enabled")
 	with HTTPServer((LISTEN_ADDR, LISTEN_PORT), SMProxyHandler) as httpd:
 		try:
 			httpd.serve_forever()

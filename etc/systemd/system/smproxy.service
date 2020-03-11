@@ -5,8 +5,8 @@ After=network.target postgresql.service
 [Service]
 Type=simple
 Restart=always
-User=tomcat
-Group=tomcat
+User=smproxy
+Group=susemanager
 EnvironmentFile=-/etc/sysconfig/smproxy
 ExecStart=/usr/local/bin/smproxy run-server
 PIDFile=/run/smproxy.pid
