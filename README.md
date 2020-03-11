@@ -3,7 +3,8 @@
 The described configuration requires one extra host with Nginx installed. It could be registered as a minion in SUSE Manager.
 There are two independant parts of implementation:
 1. [Load balancing of repositories access](#1-load-balancing-of-repositories-access)
-2. [Load balancing salt minions within the proxies](#2)
+2. [Load balancing salt minions within the proxies](#2-load-balancing-salt-minions-within-the-proxies)
+
 These two parts are totally independant and could be implemented in any order and alone from the other one.
 
 # 1. Load balancing of repositories access
