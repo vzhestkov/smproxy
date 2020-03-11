@@ -8,7 +8,7 @@ These two parts are totally independant and could be implemented in any order an
 
 # 1. Load balancing of repositories access
 Load balancing of repositories access is made with Nginx host. The sample configuration is the following:
-*/etc/nginx/conf.d/susemanager-proxy.conf*:
+**[/etc/nginx/conf.d/susemanager-proxy.conf](etc/nginx/conf.d/susemanager-proxy.conf)**:
 ```
 upstream suse-manager-proxies {
   server smgr4-pxy1.demo.lab:443;
