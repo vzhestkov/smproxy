@@ -2,8 +2,8 @@
 # Basic description
 The described configuration requires one extra host with Nginx installed. It could be registered as a minion in SUSE Manager.
 There are two independant parts of implementation:
-1. Load balancing of repositories access
-2. Load balancing salt minions within the proxies
+1. [Load balancing of repositories access](#1-load-balancing-of-repositories-access)
+2. [Load balancing salt minions within the proxies](#2)
 These two parts are totally independant and could be implemented in any order and alone from the other one.
 
 # 1. Load balancing of repositories access
@@ -147,3 +147,6 @@ Connection: keep-alive
 <?xml version="1.0" encoding="UTF-8"?>
 <repomd xmlns="http://linux.duke.edu/metadata/repo"><data type="primary"><location href="repodata/primary.xml.gz"/><checksum type="sha256">136ac211d4f3ff55781399ece458b4531151e4410c290f8f194f4f459236ce8a</checksum><open-checksum type="sha256">72b6a5f0b745c2a18091f97cb625b6d5e76d8a4964be3cb3b6bd8a5f55868e31</open-checksum><timestamp>1565259954</timestamp></data><data type="filelists"><location href="repodata/filelists.xml.gz"/><checksum type="sha256">a2b650c760cc6f8d02bcab0354c2a9f1777a10b4657c6b17a4c16fa085792179</checksum><open-checksum type="sha256">6e3ac26b04c973b572e7efaf6c8d1d3f14e535a363f64e61e29aa757a5fe6b62</open-checksum><timestamp>1565259954</timestamp></data><data type="other"><location href="repodata/other.xml.gz"/><checksum type="sha256">00c608b411f60afa38eb4590082e37716d0684c10edc1a9b1c386ffd8369eb91</checksum><open-checksum type="sha256">b004bd7241d2e7e92afbb6a28b6b527ecc03b3b9c16a06a567e7573c5e19eede</open-checksum><timestamp>1565259954</timestamp></data><data type="susedata"><location href="repodata/susedata.xml.gz"/><checksum type="sha256">57ae935d887a69ee8dc31f85162c2d4ebec085fa8306b9e4aaff55bc59581517</checksum><open-checksum type="sha256">e9a85ce71550b1d03cae7aa2380bfee73da0fc10af01e5d345e6bfef95b949a1</open-checksum><timestamp>1565259954</timestamp></data></repomd>
 ```
+
+# 2. Load balancing salt minions within the proxies
+**TBD**
