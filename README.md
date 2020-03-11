@@ -51,3 +51,24 @@ server {
   }
 }
 ```
+There are two separated upstream lists *suse-manager-squid* and *suse-manager-proxies*.
+*suse-manager-squid* is managing the repositories data itself and do the trick with internal servers to handle redirects to exact internal proxy.
+But *suse-manager-proxies* handles all other requests as a reverse proxy and handles the connections with the clients itself without redirecting.
+*suse-manager-squid* requires additional modification on all of the proxies.
+
+The following lines should be included in the squid.conf:
+```
+http_port 8081 accel defaultsite=smgr4-pxy1.demo.lab no-vhost ignore-cc allow-direct
+https_port 8443 cert=/etc/apache2/ssl.crt/server.crt key=/etc/apache2/ssl.key/server.key accel defaultsite=smgr4-pxy1.demo.lab no-vhost ignore-cc allow-direct
+
+...
+
+http_access allow all
+```
+
+Port **8443** should be open of Nginx server for the managed systems.
+Please note that squid will use SSL certificate and key from Apache configuration made during SUSE Manager Proxy configuration with **configure-proxy.sh**.
+Nginx should be configured with SSL certificate and key generated for Nginx server. It could be done with **mgr-ssl-tool** or **rhn-ssl-tool**
+and files should be placed to **/etc/nginx/ssl/server.crt** and **/etc/nginx/ssl/server.key** on Nginx server.
+
+All the steps above are not affecting the managed systems and server, but please check the changes on SUSE Manager Proxies by refreshing repos with `zypper ref -f`.
