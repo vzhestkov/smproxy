@@ -175,6 +175,7 @@ Assign the minion to any proxy using the hashing of minion ID:
 Assign the minion(s) to any proxy(proxies) using the hashing of minion ID or only one specified proxy:
 smproxy -p PROXY_MINION_ID[:NEXT_PROXY_MINION_ID[:MORE_PROXY]] assign-proxy [minions list]
 Usign this format you can assign the minions passed to the command line or standard input or file.
+
 Examples:
 `smproxy -p smgr4-pxy2.demo.lab assign-proxy sles12sp3-fstek.demo.lab`
 (Assign sles12sp3-fstek.demo.lab to smgr4-
