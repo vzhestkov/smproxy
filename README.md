@@ -150,4 +150,90 @@ Connection: keep-alive
 ```
 
 # 2. Load balancing salt minions within the proxies
-**TBD**
+
+This feature is made with a pair of scipts:
+**smproxy** - the script and WEB service to be executed on SUSE Manager Server side
+**smproxycl** - simple shell script to handle this feature on Minion side.
+
+## smproxy
+
+List all available proxies from SUSE Manager registered systems:
+`smproxy list-proxies`
+
+List all of the minions, except proxies (probably not so useful, but in some cases it could help):
+`smproxy list-all`
+
+List all of the minions already assigned to any proxy and specify which one:
+`smproxy list-assignments`
+
+List all of the minions which are not assigned to any proxy:
+`smproxy list-unassigned`
+
+Assign the minion to any proxy using the hashing of minion ID:
+`smproxy assign-proxy sled15-smm.demo.lab`
+
+Assign the minion(s) to any proxy(proxies) using the hashing of minion ID or only one specified proxy:
+smproxy -p PROXY_MINION_ID[:NEXT_PROXY_MINION_ID[:MORE_PROXY]] assign-proxy [minions list]
+Usign this format you can assign the minions passed to the command line or standard input or file.
+Examples:
+`smproxy -p smgr4-pxy2.demo.lab assign-proxy sles12sp3-fstek.demo.lab`
+(Assign sles12sp3-fstek.demo.lab to smgr4-
+pxy2.demo.lab proxy)
+
+`echo -e "sle124-2066.demo.lab\nubuntu-smm.demo.lab" | smproxy -p smgr4-pxy2.demo.lab assign-proxy`
+(assign two minions specified in echo to the only proxy)
+
+`cat minions_list | smproxy -p smgr4-pxy1.demo.lab:smgr4-pxy2.demo.lab assign-proxy`
+`smproxy -f minions_list -p smgr4-pxy1.demo.lab:smgr4-pxy2.demo.lab assign-proxy`
+(This two examples do the same, both spreads the minions listed in minions_list file within two proxies specified)
+
+`smproxy -A assign-proxy`
+(Assign all of the systems withing all of the available proxies)
+
+`smproxy -A -F assign-proxy`
+(In general do almost the same as previous, the only difference - it could reassign the minion to different proxy if
+hasing rule doesn't match current assignment)
+
+`smproxy -A -F -x smgr4-pxy1.demo.lab:smgr4-pxy2.demo.lab assign-proxy`
+(Do the same as previous, but exclude two specified proxies from assignments, all of the minions should be spread by
+hash within all the proxiess except specified, -p instead of -x do opposite, spread within specified proxies only)
+
+Assignment deletion is not implemented.
+
+## smproxy as a WEB service
+
+To run smproxy as a WEB service the following files should be placed on the SUSE Manager Server:
+**[/usr/local/bin/smproxy](usr/local/bin/smproxy)** - script itself
+**[/etc/sysconfig/smproxy](etc/sysconfig/smproxy)** - WEB service config file
+**[/etc/systemd/system/smproxy.service](etc/systemd/system/smproxy.service)** - systemd service file
+**[/etc/apache2/conf.d/smproxy.conf](etc/apache2/conf.d/smproxy.conf)** - additional Apache2 config file to make smproxy WEB service accessible for Minions
+
+To run the scipt the following commands should be performed:
+```
+useradd -g susemanager -M -N smproxy
+touch /var/log/smproxy.log
+chmod 0660 /var/log/smproxy.log
+setfacl -m u:smproxy:rx /etc/rhn
+setfacl -m u:smproxy:r /etc/rhn/rhn.conf
+setfacl -R -m u:smproxy:rw /srv/susemanager/pillar_data
+setfacl -m u:smproxy:rwx /srv/susemanager/pillar_data
+setfacl -d u:smproxy:rw /srv/susemanager/pillar_data
+```
+
+Exctended ACL for **/srv/susemanager/pillar_data** is required to make **smproxy** able to write the changes to **mgr_server** pillar data of the minion.
+
+To enable the service run `systemctl daemon-reload ; systemctl enable --now smproxycl.service`.
+To make the service available for the minions with Apache2 you also need to restart the Apache2 service `systemctl restart apache2.service`.
+
+## smrproxycl states
+
+There are a set of states to make **smproxycl** script implementation easier on the minions side.
+To check if the service available for the minion just copy **[/srv/salt/smproxycl](srv/salt/smproxycl)** to SUSE Manager Server.
+Modify [/srv/salt/smproxycl/files/etc/sysconfig/smproxycl](srv/salt/smproxycl/files/etc/sysconfig/smproxycl) with **SMPROXY_HOST** variable.
+And run `salt MINION_ID state.apply smproxycl.install`. Then you may check if **smproxycl** works fine by running `smproxycl` on the minion.
+It should return the hostname of the proxy it is assigned to.
+The following parameters are available for **smproxycl**:
+`smproxycl get-proxies` - lists all available proxies
+`smproxycl install` - injects **smproxycl** script to salt-minion.service file and restart the salt-minion.service
+
+**Please check with the limited number of the minions first!**
