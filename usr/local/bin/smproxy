@@ -520,19 +520,19 @@ def mtcsGetSaltKeys(prefix = None):
 
 metrics = {
 	'suse_manager_db_online_1h' : {
-		'HELP': 'The number of systemc checked within last hour',
+		'HELP': 'The number of systems checked within last hour',
 		'TYPE': 'gauge' , 'getFunc': mtcsGetOnline },
 	'suse_manager_db_online_2h' : {
-		'HELP': 'The number of systemc checked within last 2 hours',
+		'HELP': 'The number of systems checked within last 2 hours',
 		'TYPE': 'gauge' , 'getFunc': mtcsGetOnline },
 	'suse_manager_db_online_4h' : {
-		'HELP': 'The number of systemc checked within last 4 hours',
+		'HELP': 'The number of systems checked within last 4 hours',
 		'TYPE': 'gauge' , 'getFunc': mtcsGetOnline },
 	'suse_manager_db_online_1d' : {
-		'HELP': 'The number of systemc checked within last day',
+		'HELP': 'The number of systems checked within last day',
 		'TYPE': 'gauge' , 'getFunc': mtcsGetOnline },
 	'suse_manager_db_suseSaltEvent_count' : {
-		'HELP': 'The number of records in suseSaltEvent table of SUSE Manager DB',
+		'HELP': 'The number of records in suseSaltEvent table',
 		'TYPE': 'gauge' , 'getFunc': mtcsGetSuseSaltEvent },
 	'suse_manager_db_rhnServer_count' : {
 		'HELP': 'The number of registered systems',
