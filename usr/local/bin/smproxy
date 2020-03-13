@@ -457,6 +457,32 @@ def smGetProxies(hdrs):
 def reqGetProxies(req, param):
 	return smGetProxies(req.headers)
 
+mtcsGoLRT = 0
+mtcsGoTRSH = 900
+mtcsGoCACHE = {}
+def mtcsGetOnline(prefix = None):
+	global mtcsGoLRT
+	global mtcsGoTRSH
+	global mtcsGoCACHE
+	ts = time.time()
+	if ts - mtcsGoLRT > mtcsGoTRSH:
+		mtcsGoLRT = ts
+		h = rhnSQL.prepare("""SELECT SUM(CASE WHEN AGE(CLOCK_TIMESTAMP(), checkin)<'1 hour' THEN 1 ELSE 0 END) AS online_1h,
+							SUM(CASE WHEN AGE(CLOCK_TIMESTAMP(), checkin)<'2 hours' THEN 1 ELSE 0 END) AS online_2h,
+							SUM(CASE WHEN AGE(CLOCK_TIMESTAMP(), checkin)<'4 hours' THEN 1 ELSE 0 END) AS online_4h,
+							SUM(CASE WHEN AGE(CLOCK_TIMESTAMP(), checkin)<'1 day' THEN 1 ELSE 0 END) AS online_1d FROM rhnServerInfo""")
+		h.execute()
+		r = h.fetchone_dict()
+		if r:
+			mtcsGoCACHE = r
+	else:
+		r = mtcsGoCACHE
+	val = 0
+	mn = prefix.replace('suse_manager_db_', '')
+	if mn in r:
+		val = r[mn]
+	return "%s %s\n" % (prefix, val)
+
 def mtcsGetSuseSaltEvent(prefix = None):
 	h = rhnSQL.prepare("SELECT COUNT(*) AS cnt FROM suseSaltEvent")
 	h.execute()
@@ -473,13 +499,38 @@ salt_key_types = {
 	'denied': '/etc/salt/pki/master/minions_denied',
 	'rejected': '/etc/salt/pki/master/minions_rejected'
 }
+mtcsGskLRT = 0
+mtcsGskTRSH = 300
+mtcsGskCACHE = {}
 def mtcsGetSaltKeys(prefix = None):
+	global mtcsGskLRT
+	global mtcsGskTRSH
+	global mtcsGskCACHE
+	ts = time.time()
 	out = ""
-	for ktype in salt_key_types:
-		out += "%s{type=\"%s\"} %d\n" % (prefix, ktype, int(os.popen("find '%s' -maxdepth 1 -type f -printf . | wc -c" % salt_key_types[ktype]).read()));
+	if ts - mtcsGskLRT > mtcsGskTRSH:
+		mtcsGskLRT = ts
+		for ktype in salt_key_types:
+			mtcsGskCACHE['ktype'] = int(os.popen("find '%s' -maxdepth 1 -type f -printf . | wc -c" % salt_key_types[ktype]).read())
+			out += "%s{type=\"%s\"} %d\n" % (prefix, ktype, mtcsGskCACHE['ktype'])
+	else:
+		for ktype in salt_key_types:
+			out += "%s{type=\"%s\"} %d\n" % (prefix, ktype, mtcsGskCACHE['ktype'])
 	return out
 
 metrics = {
+	'suse_manager_db_online_1h' : {
+		'HELP': 'The number of systemc checked within last hour',
+		'TYPE': 'gauge' , 'getFunc': mtcsGetOnline },
+	'suse_manager_db_online_2h' : {
+		'HELP': 'The number of systemc checked within last 2 hours',
+		'TYPE': 'gauge' , 'getFunc': mtcsGetOnline },
+	'suse_manager_db_online_4h' : {
+		'HELP': 'The number of systemc checked within last 4 hours',
+		'TYPE': 'gauge' , 'getFunc': mtcsGetOnline },
+	'suse_manager_db_online_1d' : {
+		'HELP': 'The number of systemc checked within last day',
+		'TYPE': 'gauge' , 'getFunc': mtcsGetOnline },
 	'suse_manager_db_suseSaltEvent_count' : {
 		'HELP': 'The number of records in suseSaltEvent table of SUSE Manager DB',
 		'TYPE': 'gauge' , 'getFunc': mtcsGetSuseSaltEvent },
