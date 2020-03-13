@@ -511,11 +511,11 @@ def mtcsGetSaltKeys(prefix = None):
 	if ts - mtcsGskLRT > mtcsGskTRSH:
 		mtcsGskLRT = ts
 		for ktype in salt_key_types:
-			mtcsGskCACHE['ktype'] = int(os.popen("find '%s' -maxdepth 1 -type f -printf . | wc -c" % salt_key_types[ktype]).read())
-			out += "%s{type=\"%s\"} %d\n" % (prefix, ktype, mtcsGskCACHE['ktype'])
+			mtcsGskCACHE[ktype] = int(os.popen("find '%s' -maxdepth 1 -type f -printf . | wc -c" % salt_key_types[ktype]).read())
+			out += "%s{type=\"%s\"} %d\n" % (prefix, ktype, mtcsGskCACHE[ktype])
 	else:
 		for ktype in salt_key_types:
-			out += "%s{type=\"%s\"} %d\n" % (prefix, ktype, mtcsGskCACHE['ktype'])
+			out += "%s{type=\"%s\"} %d\n" % (prefix, ktype, mtcsGskCACHE[ktype])
 	return out
 
 metrics = {
