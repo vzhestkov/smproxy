@@ -57,7 +57,7 @@ There are two separated upstream lists **suse-manager-squid** and **suse-manager
 But **suse-manager-proxies** handles all other requests as a reverse proxy and handles the connections with the clients itself without redirecting.
 **suse-manager-squid** requires additional modification on all of the proxies.
 
-The following lines should be included in the **[/etc/squid/squid.conf}(etc/squid/squid.conf)**:
+The following lines should be included in the **[/etc/squid/squid.conf](etc/squid/squid.conf)**:
 ```
 http_port 8081 accel defaultsite=smgr4-pxy1.demo.lab no-vhost ignore-cc allow-direct
 https_port 8443 cert=/etc/apache2/ssl.crt/server.crt key=/etc/apache2/ssl.key/server.key accel defaultsite=smgr4-pxy1.demo.lab no-vhost ignore-cc allow-direct
